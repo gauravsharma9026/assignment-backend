@@ -1,0 +1,144 @@
+const User = require('../models/user');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+const fs = require('fs');
+const path = require('path');
+var filePath = path.join(__dirname, 'user-data.csv');
+var outPath = path.join(__dirname, 'user-data.json');
+
+
+const multer = require('multer');
+const { resolve } = require('path');
+const { rejects } = require('assert');
+
+
+exports.csvUpload = (req, res, next) => {
+    try {
+        let { filePath } = await uploadFile(req);
+        let userArray = await getCSVData(filePath);
+        await User.insertArray(userArray);
+        res.status(200).send({ message: "success" })
+    } catch (e) {
+        console.log(e);
+        res.status(500).send({ message: error.message })
+    }
+
+
+}
+
+exports.createUser = (req, res, next) => {
+    bcrypt.hash(req.body.password, 10)
+        .then(hash => {
+            const user = new User({
+                email: req.body.email,
+                password: hash
+            });
+
+            user.save().then(result => {
+                res.status(201).json({
+                    message: 'User created successfully',
+                    result: result
+                });
+            }).catch(err => {
+                console.log(err);
+                res.status(500).json({
+                    message: "Invalid Authenticated credentials"
+                });
+            });
+        });
+}
+
+exports.userLogin = (req, res, next) => {
+    let fetchedUser;
+    User.findOne({ email: req.body.email })
+        .then(user => {
+            if (!user) {
+                return res.status(401).json({
+                    message: "Auth falied"
+                });
+            }
+            fetchedUser = user;
+            return bcrypt.compare(req.body.password, user.password);
+        })
+        .then(result => {
+            if (!result) {
+                return res.status(401).json({
+                    message: "Auth falied"
+                });
+            }
+
+            const token = jwt.sign({ email: fetchedUser.email, userId: fetchedUser._id },
+                'secret_this_should_be_longer', { expiresIn: '1h' }
+            );
+
+            return res.status(200).json({
+                token: token,
+                expiresIn: 3600,
+                userId: fetchedUser._id
+            });
+
+        }).catch(err => {
+            return res.status(401).json({
+                message: "Auth falied"
+            });
+        });
+}
+
+function uploadFile(req) {
+    return new Promise((resolve, reject) => {
+        try {
+            //file path where the file will be stored -> should be absolute path
+            const filePath = `${process.cwd()}/public/uploads/file-${Date.now()}`;
+            // create write stream , with w flag , on given path
+            let filestream = fs.createWriteStream(filePath, { flags: 'w' });
+            /* 
+               pipe the readable request stream with binary file to the writable stream
+               this will read the file in chuncks and simultanously write file to disk into chunks 
+            */
+            req.pipe(filestream);
+
+            /*@desc-> event fired on close i.e when file uploaded on disk completely                 */
+            filestream.on('close', () => {
+                resolve({ filePath })
+            });
+
+            /*@desc -> error event  if any error occur in writing the file */
+            filestream.on('error', (error) => {
+                reject(error);
+            });
+
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+function getCSVData(filePath) {
+    return new Promise((resolve, reject) => {
+        var jsonArray = [];
+        //This will read the file.
+        fs.readFile(filePath, { encoding: 'utf-8' }, function(err, data) {
+            if (err) {
+                reject(error);
+            }
+            //The following line will split the csv file line by line and store each of it in the vraiable dataArray.
+            var dataArray = data.split("\n");
+            //This line helps us to obtain the keys for various values in the file.
+            var fieldsArray = dataArray[0].split(",");
+
+            //The following loop creates an object for every line and then pushes it into the array.
+            for (var i = 1; i < dataArray.length; i++) {
+                var temp = {};
+                //contains values which are separated by a comma in a line.
+                var valuesArray = dataArray[i].split(",");
+                for (var k = 0; k < valuesArray.length; k++) {
+                    temp[fieldsArray[k]] = valuesArray[k]
+                }
+                //pushes the object into the array.
+                jsonArray.push(temp);
+                console.log(jsonArray);
+            }
+            resolve(jsonArray);
+        });
+    })
+}
